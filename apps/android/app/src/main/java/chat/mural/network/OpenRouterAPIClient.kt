@@ -52,7 +52,7 @@ class OpenRouterAPIClient private constructor(
             throw APIClient.APIException.Refused
         }
         val body = buildJsonObject {
-            put("model", OpenRouterModels.LLM)
+            put("model", ProviderModelConfig.current.llm)
             put("messages", buildJsonArray {
                 add(buildJsonObject {
                     put("role", "system")
@@ -86,7 +86,7 @@ class OpenRouterAPIClient private constructor(
         locale: String?,
     ): String {
         val body = buildJsonObject {
-            put("model", OpenRouterModels.LLM)
+            put("model", ProviderModelConfig.current.llm)
             put("max_tokens", 220)
             put("temperature", 0.7)
             put("messages", buildJsonArray {
@@ -95,7 +95,7 @@ class OpenRouterAPIClient private constructor(
                     put("content", buildString {
                         append(systemInstructions)
                         append("\n\n")
-                        append(OpenRouterModels.VOICE_BREVITY_PROMPT)
+                        append(ProviderModelConfig.current.voiceBrevityPrompt)
                         if (overlay.isNotBlank()) {
                             append("\n\nAktuelle Anweisung (nicht vorlesen): ")
                             append(overlay.take(1200))
@@ -117,7 +117,7 @@ class OpenRouterAPIClient private constructor(
         val wav = WavEncoder.encodePcm16Mono(pcm16Mono, sampleRate)
         val base64 = Base64.encodeToString(wav, Base64.NO_WRAP)
         val body = buildJsonObject {
-            put("model", OpenRouterModels.STT)
+            put("model", ProviderModelConfig.current.stt)
             put("data", base64)
         }
         val response = post("audio/transcriptions", body)
@@ -128,15 +128,16 @@ class OpenRouterAPIClient private constructor(
     }
 
     suspend fun synthesizeSpeech(text: String, locale: String?): ByteArray {
-        val voice = OpenRouterModels.ttsVoiceForLocale(locale)
-        cache?.lookup(OpenRouterModels.TTS, voice, text)?.let { return it }
+        val config = ProviderModelConfig.current
+        val voice = config.ttsVoice
+        cache?.lookup(config.tts, voice, text)?.let { return it }
         val body = buildJsonObject {
-            put("model", OpenRouterModels.TTS)
+            put("model", config.tts)
             put("input", text.take(900))
             put("voice", voice)
         }
         val bytes = postBytes("audio/speech", body)
-        cache?.store(OpenRouterModels.TTS, voice, text, bytes)
+        cache?.store(config.tts, voice, text, bytes)
         return bytes
     }
 

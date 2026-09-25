@@ -166,7 +166,7 @@ fun MuralApp(
                     Column(Modifier.fillMaxHeight(.94f)) {
                         SettingsScreen(vm, onExport, onImport, onReviewConsent = {
                             vm.pendingCloudAction = null; showConsent = true
-                        }, onAccount = if (account?.configuration != null) ({
+                        }, onAccount = if (vm.showHostedAccountFeatures && account?.configuration != null) ({
                             account.refresh(); showAccount = true
                         }) else null, onDismiss = { showSettings = false })
                     }

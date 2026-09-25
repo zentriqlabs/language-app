@@ -17,9 +17,9 @@ class OpenRouterModelsTest {
         assertFalse(OpenRouterModels.isOpenRouterKey("sk-proj-" + "a".repeat(40)))
     }
 
-    @Test fun credentialStoreAcceptsBothProviders() {
+    @Test fun credentialStoreAcceptsOpenRouterOnly() {
         assertTrue(CredentialStore.isValidApiKey("sk-or-v1-test-key-1234567890"))
-        assertTrue(CredentialStore.isValidApiKey("sk-proj-test-key-1234567890"))
+        assertFalse(CredentialStore.isValidApiKey("sk-proj-test-key-1234567890"))
         assertFalse(CredentialStore.isValidApiKey("bad"))
     }
 }

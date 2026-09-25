@@ -149,9 +149,9 @@ class APIClient private constructor(
     }
 
     sealed class APIException(message: String, cause: Throwable? = null) : IOException(message, cause) {
-        data object MissingKey : APIException("Add your OpenAI key in Settings to begin.")
-        data object InvalidResponse : APIException("OpenAI returned an incomplete response. Please try again.")
-        data object Incomplete : APIException("OpenAI returned an incomplete response. Please try again.")
+        data object MissingKey : APIException("Add your OpenRouter key in Settings to begin.")
+        data object InvalidResponse : APIException("The provider returned an incomplete response. Please try again.")
+        data object Incomplete : APIException("The provider returned an incomplete response. Please try again.")
         data object Refused : APIException("Mural couldn't complete that request. Try a different topic.")
         class Http(val status: Int) : APIException(messageFor(status))
 

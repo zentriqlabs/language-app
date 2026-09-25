@@ -10,7 +10,7 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-/** Stores the OpenAI API key encrypted by a non-exportable Android Keystore key. */
+/** Stores the OpenRouter API key encrypted by a non-exportable Android Keystore key. */
 class CredentialStore internal constructor(
     context: Context,
     preferencesName: String,
@@ -108,7 +108,7 @@ class CredentialStore internal constructor(
     }
 
     sealed class CredentialException(message: String) : IllegalStateException(message) {
-        data object Invalid : CredentialException("Enter a valid OpenAI API key.")
+        data object Invalid : CredentialException("Enter a valid OpenRouter API key (sk-or-v1-…).")
         data object Save : CredentialException("The key couldn't be saved securely on this device.")
         data object Remove : CredentialException("The key couldn't be removed. Unlock this device and try again.")
     }
@@ -116,11 +116,7 @@ class CredentialStore internal constructor(
     fun usesOpenRouter(): Boolean = read()?.let(OpenRouterModels::isOpenRouterKey) == true
 
     companion object {
-        internal fun isValidApiKey(value: String): Boolean {
-            val trimmed = value.trim()
-            if (trimmed.any(Char::isWhitespace) || trimmed.length < 20) return false
-            return trimmed.startsWith("sk-or-") || trimmed.startsWith("sk-")
-        }
+        internal fun isValidApiKey(value: String): Boolean = OpenRouterModels.isOpenRouterKey(value)
         // The app excludes all shared preferences from cloud backup and device transfer.
         private const val PREFERENCES = "mural_openai_credentials"
         private const val CIPHERTEXT = "ciphertext"
