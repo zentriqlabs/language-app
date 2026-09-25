@@ -14,6 +14,8 @@ import { configuredMinuteCommerce } from './minute-commerce-config.js';
 import { HostedHelpers } from './hosted-helpers.js';
 import { OpenAIHostedResponses } from './hosted-responses-transport.js';
 import { InstallationGuestMinuteAttestor } from './guest-minutes.js';
+import { loadOpenRouterModels } from './openrouter-config.js';
+import { TtsAudioCache } from './tts-audio-cache.js';
 
 const databaseURL = process.env.DATABASE_URL;
 if (!databaseURL) { console.error('DATABASE_URL is required.'); process.exit(1); }
@@ -90,9 +92,15 @@ try {
     throw new Error('Android Google identity configuration is incomplete.');
   if (accounts && !hasGoogleSignIn({ googleClientID: process.env.GOOGLE_CLIENT_ID, googleAndroidServerClientID, googleAndroidClientIDs }) &&
     !(appleClient && appleRevoker)) throw new Error('No account identity provider configured.');
+  const openRouterKey = process.env.OPENROUTER_API_KEY;
+  const openRouter = openRouterKey ? {
+    key: openRouterKey,
+    models: await loadOpenRouterModels(),
+    cache: await TtsAudioCache.open(process.env.TTS_CACHE_DIR ?? '/tmp/mural-tts-cache'),
+  } : undefined;
   const app = createApp({ db, auth: { googleClientID: process.env.GOOGLE_CLIENT_ID, appleClientID: appleClient,
     googleAndroidServerClientID, googleAndroidClientIDs }, payments, appleRevoker, hosted, hostedHelpers,
-    minuteCommerce, accessRequests, accounts, aiReports,guestMinuteAttestor,
+    minuteCommerce, accessRequests, accounts, aiReports,guestMinuteAttestor, openRouter,
     onStartupDiagnostic: diagnostic => console.warn(JSON.stringify({ event: 'conversation_request_failed', ...diagnostic })) });
   const cleanup = setInterval(() => {
     void pruneAuthenticationRecords(db).catch(() => { console.error('Account retention cleanup failed.'); });

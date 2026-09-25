@@ -20,8 +20,12 @@ import type { StripeMinuteProvider } from './stripe-minute-provider.js';
 import type { PlayMinuteProvider } from './play-minute-provider.js';
 import { HOSTED_HELPER_BODY_LIMIT, type HostedHelpers } from './hosted-helpers.js';
 import { startupDiagnostic, type StartupDiagnostic } from './startup-diagnostics.js';
+import { registerOpenRouterRoutes } from './openrouter-proxy.js';
+import type { OpenRouterModels } from './openrouter-config.js';
+import type { TtsAudioCache } from './tts-audio-cache.js';
 
 export interface Services { db: Database; auth: AuthConfig; payments?: SandboxPayments; attestor?: TrialAttestor; minuteAttestor?: MinuteAttestor; guestMinuteAttestor?: GuestMinuteAttestor; appleRevoker?: AppleRevoker; hosted?: HostedVoice; accessRequests?: AccessRequests; aiReports?: AIReports;
+  openRouter?: { key: string; models: OpenRouterModels; cache: TtsAudioCache };
   onStartupDiagnostic?: (diagnostic: StartupDiagnostic) => void | Promise<void>;
   hostedHelpers?: HostedHelpers;
   minuteCommerce?: { purchases: MinutePurchases; aiPurchases?: AIValuePurchases; fulfillment?: PurchaseFulfillmentRouter;
@@ -57,6 +61,9 @@ export function createApp(services: Services) {
   };
   const app = Fastify({ logger: false, bodyLimit: 262_144, routerOptions: { maxParamLength: 128 },
     requestTimeout: 15_000, trustProxy: false, genReqId: () => randomUUID() });
+  if (services.openRouter) {
+    registerOpenRouterRoutes(app, services.openRouter.key, services.openRouter.models, services.openRouter.cache);
+  }
   // No request bodies, Authorization headers, tokens, transcripts, or Stripe payloads are logged.
   app.removeContentTypeParser('application/json');
   app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (request, body, done) => {
