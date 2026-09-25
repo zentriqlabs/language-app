@@ -8,6 +8,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import chat.mural.core.*
+import chat.mural.BuildConfig
 import chat.mural.network.*
 import java.util.UUID
 import kotlinx.coroutines.*
@@ -113,13 +114,20 @@ class MuralViewModel(application: Application) : AndroidViewModel(application) {
     val language get() = LanguageRegistry.get(archive.preferences.learningLanguageID)!!
     val learner get() = LearningEngine.project(archive.sessions, language.id, archive.preferences.hiddenWords)
     val isRunning get() = state in listOf("connecting", "active", "closing")
+    val showHostedAccountFeatures get() = hostedServicesEnabled
     val isVoiceSession get() = voiceSession
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val repository = LearningRepository(application)
     private val credentials = CredentialStore(application)
+    private val hostedServicesEnabled get() = BuildConfig.MANAGED_API_ORIGIN.isNotBlank()
+    /** Legacy hosted voice only; private builds use OpenRouter pipeline. */
     private val api = APIClient(credentials)
+    private val phraseAudioCache = PhraseAudioCache(application)
+    private val openRouterApi = OpenRouterAPIClient(credentials, phraseAudioCache)
     private val transport = LiveTransport(application, viewModelScope)
+    private val openRouterVoice = OpenRouterVoiceTransport(application, viewModelScope, openRouterApi)
+    private var openRouterVoiceActive = false
     private val providerStore = ConversationProviderStore(application)
     private val hostedConfiguration = HostedConfiguration.parse(BuildConfig.MANAGED_API_ORIGIN)
     private val accountConfiguration = ManagedAccountConfiguration.parse(BuildConfig.MANAGED_API_ORIGIN, BuildConfig.GOOGLE_SERVER_CLIENT_ID)
@@ -246,16 +254,21 @@ class MuralViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
-        transport.onEvent = { event ->
+        val voiceHandler: (JsonObject) -> Unit = { event ->
             try { handle(event) }
             catch (_: IllegalArgumentException) { notice = getApplication<Application>().getString(R.string.notice_invalid_voice_update) }
             catch (_: IllegalStateException) { notice = getApplication<Application>().getString(R.string.notice_invalid_voice_update) }
         }
+        transport.onEvent = voiceHandler
+        openRouterVoice.onEvent = voiceHandler
         transport.onFailure = { fail(it) }
-        transport.onLevels = { input, output ->
+        openRouterVoice.onFailure = { fail(it) }
+        val levelHandler: (Double, Double) -> Unit = { input, output ->
             inputLevel = input; outputLevel = output
             if (input > 0.03 || output > 0.03) lastActivity = nowSeconds()
         }
+        transport.onLevels = levelHandler
+        openRouterVoice.onLevels = levelHandler
         meanings.onChange = { meaning = meanings.text; translating = meanings.isLoading; meaningFailed = meanings.error != null }
         meanings.onResult = { request, result ->
             if (session?.id == request.sessionID) updateSession {
@@ -470,11 +483,13 @@ class MuralViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun teaching(localID: String?, purpose: HelperPurpose, logicalID: String,
         instructions: String, input: String, schema: JsonObject? = null, search: Boolean = false): APIResult {
         if (archive.preferences.aiConsentVersion != 1) throw HostedFailure.Unavailable
-        if (localID != null && localID in hostedSessionIDs) {
-            return hostedBindings.respond(localID, purpose, logicalID, instructions, input, schema, search)
+        if (hostedServicesEnabled && localID != null && localID in hostedSessionIDs) {
+            return hostedBindings.respond(localID, purpose, logicalID, instructions, input, schema, false)
         }
-        if (localID == null && conversationProvider == ConversationProvider.HOSTED_MINUTES) throw HostedFailure.Unavailable
-        return api.respond(instructions, input, schema, search, purpose)
+        if (hostedServicesEnabled && localID == null && conversationProvider == ConversationProvider.HOSTED_MINUTES) {
+            throw HostedFailure.Unavailable
+        }
+        return openRouterApi.respond(instructions, input, schema, false, purpose)
     }
     private fun helperContext(snapshot: SessionRecord, passage: Passage? = null): String =
         if (snapshot.id in hostedSessionIDs) ConversationHistory.helperContext(snapshot, passage)
@@ -579,7 +594,17 @@ class MuralViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun saveKey(key: String) {
         if (isRunning) return
-        try { credentials.save(key); hasKey = credentials.hasKey; selectConversationProvider(ConversationProvider.PERSONAL_KEY); recoverFinalAssessments(); notice = getApplication<Application>().getString(R.string.notice_key_saved) }
+        try {
+            credentials.save(key); hasKey = credentials.hasKey
+            selectConversationProvider(ConversationProvider.PERSONAL_KEY)
+            recoverFinalAssessments()
+            notice = getApplication<Application>().getString(R.string.notice_key_saved)
+            if (NetworkStatus.isOnline(getApplication())) {
+                viewModelScope.launch {
+                    try { OfflinePhrasePrefetch.warm(openRouterApi, language, learner) } catch (_: Exception) { }
+                }
+            }
+        }
         catch (e: Exception) { presentError(e, R.string.error_key_save_failed) }
     }
     fun deleteKey() {
@@ -618,7 +643,12 @@ class MuralViewModel(application: Application) : AndroidViewModel(application) {
         meanings.reset()
         if (archive.preferences.meaningVisible) scheduleTranslation()
     }
-    fun toggleMute() { if (state == "active" && voiceSession) { isMuted = !isMuted; transport.mute(isMuted) } }
+    fun toggleMute() {
+        if (state == "active" && voiceSession) {
+            isMuted = !isMuted
+            if (openRouterVoiceActive) openRouterVoice.mute(isMuted) else transport.mute(isMuted)
+        }
+    }
     fun help() {
         if (state != "active") return
         if (voiceSession) { command("instructions", TeachingPolicy.help(language)); notice = getApplication<Application>().getString(R.string.notice_help_simpler) }
@@ -647,14 +677,15 @@ class MuralViewModel(application: Application) : AndroidViewModel(application) {
     private fun newSession(voice: Boolean, id: String = UUID.randomUUID().toString()) {
         generation++; resetJob?.cancel(); assessmentJob?.cancel(); actionJob?.cancel(); clearLookup(); working = false; meanings.reset()
         dismissError(); notice = null; isMuted = false
-        voiceSession = voice; lastActivity = nowSeconds()
+        voiceSession = voice
+        lastActivity = nowSeconds()
         val record = SessionRecord(id = id, languageID = language.id, themeID = selectedTheme?.id, title = selectedTheme?.title ?: language.defaultTitle)
         topicResult?.takeIf { it.languageID == language.id && selectedTheme?.id == "current" }?.let { record.topics += it }
         session = record; save(record)
     }
     fun start() {
         if (isRunning || !cloudReady()) return
-        val choice = conversationProvider
+        val choice = if (hostedServicesEnabled) conversationProvider else ConversationProvider.PERSONAL_KEY
         if (choice == ConversationProvider.HOSTED_MINUTES && accountChangeBlocked) {
             presentError(getApplication<Application>().getString(R.string.hosted_checking_previous))
             reconcileHostedSessions(); return
@@ -665,7 +696,13 @@ class MuralViewModel(application: Application) : AndroidViewModel(application) {
             } else presentError(getApplication<Application>().getString(R.string.error_missing_key), true)
             return
         }
-        newSession(true); state = "connecting"
+        if (!NetworkStatus.isOnline(getApplication())) {
+            presentError(getApplication<Application>().getString(R.string.error_offline_voice))
+            return
+        }
+        newSession(true)
+        openRouterVoiceActive = true
+        state = "connecting"
         val id = session!!.id
         val module = language
         val instructions = TeachingPolicy.voice(module, learner, selectedTheme, archive.preferences.interests, archive.preferences.meaningLanguage)
@@ -697,7 +734,11 @@ class MuralViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                 }
-                transport.connect(provider, instructions, history, module.locale)
+                if (openRouterVoiceActive) {
+                    openRouterVoice.connect(instructions, history, module.locale)
+                } else {
+                    transport.connect(provider, instructions, history, module.locale)
+                }
             } catch (cancelled: CancellationException) {
                 if (choice == ConversationProvider.HOSTED_MINUTES) reconcileHostedSessions()
                 throw cancelled
@@ -715,7 +756,7 @@ class MuralViewModel(application: Application) : AndroidViewModel(application) {
         delegations.values.toList().forEach { it.cancel() }; delegations.clear(); working = false
         updateSession { it.endReason = reason }
         if (!voiceSession || connecting) { finish(false); return }
-        transport.close()
+        if (openRouterVoiceActive) openRouterVoice.close() else transport.close()
         closeJob = viewModelScope.launch { delay(5000); if (state == "closing") finish(false) }
     }
     fun background() {
@@ -728,7 +769,10 @@ class MuralViewModel(application: Application) : AndroidViewModel(application) {
         connectionJob?.cancel(); durationJob?.cancel(); closeJob?.cancel(); assessmentJob?.cancel()
         actionJob?.cancel(); clearLookup(); languageCheckJob?.cancel()
         delegations.values.toList().forEach { it.cancel() }; delegations.clear()
-        transport.disconnect(); inputLevel = 0.0; outputLevel = 0.0; working = false; isMuted = false
+        transport.disconnect()
+        openRouterVoice.disconnect()
+        openRouterVoiceActive = false
+        inputLevel = 0.0; outputLevel = 0.0; working = false; isMuted = false
         updateSession { it.endedAt = nowSeconds(); it.usageFinal = final }
         state = "ended"
         session?.let {
@@ -752,10 +796,12 @@ class MuralViewModel(application: Application) : AndroidViewModel(application) {
     }
     private fun command(kind: String, content: String, delegationID: String? = null): Boolean {
         if (state != "active" || !voiceSession) return false
-        return transport.send(buildJsonObject {
+        val payload = buildJsonObject {
             put("type", "session.$kind.append"); put("event_id", UUID.randomUUID().toString())
             put("delegation_id", delegationID?.let(::JsonPrimitive) ?: JsonNull); put("content", content.take(1000))
-        }).also { if (!it) notice = getApplication<Application>().getString(R.string.notice_update_send_failed) }
+        }
+        val accepted = if (openRouterVoiceActive) openRouterVoice.send(payload) else transport.send(payload)
+        return accepted.also { if (!it) notice = getApplication<Application>().getString(R.string.notice_update_send_failed) }
     }
     private fun handle(event: JsonObject) {
         if (session == null || !isRunning) return
@@ -917,7 +963,7 @@ class MuralViewModel(application: Application) : AndroidViewModel(application) {
                 delay(500)
                 val snapshot = session ?: return@launch
                 val result = teaching(snapshot.id, HelperPurpose.DELEGATION, id,
-                    TeachingPolicy.delegation(language), helperContext(snapshot), search = snapshot.searchCalls < 3)
+                    TeachingPolicy.delegation(language), helperContext(snapshot), search = false)
                 if (state != "active" || session?.id != sessionID) return@launch
                 updateSession { addUsage(it, result.usage); if (result.sources.isNotEmpty()) it.topics += TopicBrief(languageID = it.languageID, query = getApplication<Application>().getString(R.string.topics_from_conversation), text = result.text, sources = result.sources) }
                 command("commentary", result.text, id)
@@ -928,6 +974,10 @@ class MuralViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun sendTyped(text: String) {
         val clean = text.trim().take(2000)
+        if (clean.startsWith("::")) {
+            bridgeFromHomeLanguage(clean.removePrefix("::").trim())
+            return
+        }
         if (clean.isEmpty() || working || state in listOf("connecting", "closing") || !cloudReady()) return
         if (state != "active") {
             if (conversationProvider == ConversationProvider.HOSTED_MINUTES) {
@@ -957,6 +1007,38 @@ class MuralViewModel(application: Application) : AndroidViewModel(application) {
             finally { if (token == generation) working = false }
         }
     }
+    /** Nutzer beschreibt in der Heimatsprache, was er sagen möchte — Antwort in der Zielsprache. */
+    fun bridgeFromHomeLanguage(explanation: String) {
+        val clean = explanation.trim().take(800)
+        if (clean.isEmpty() || working || !cloudReady()) return
+        if (state != "active") {
+            newSession(false); state = "active"; startDurationChecks()
+        }
+        val id = session!!.id; val token = generation
+        val offset = ((nowSeconds() - session!!.startedAt) * 1000).toInt().coerceAtLeast(0)
+        updateSession {
+            it.append(Fragment(speaker = Speaker.user, text = clean, startMS = offset, endMS = offset + 1, typed = true))
+        }
+        working = true
+        actionJob = viewModelScope.launch {
+            try {
+                val result = teaching(id, HelperPurpose.HELP, UUID.randomUUID().toString(),
+                    TeachingPolicy.bridgeFromHomeLanguage(language, archive.preferences.meaningLanguage, clean),
+                    helperContext(session!!))
+                if (token != generation || session?.id != id || state != "active") return@launch
+                val end = ((nowSeconds() - session!!.startedAt) * 1000).toInt().coerceAtLeast(offset + 2)
+                updateSession {
+                    it.append(Fragment(speaker = Speaker.assistant, text = result.text, startMS = end, endMS = end + 1))
+                    addUsage(it, result.usage)
+                }
+                if (voiceSession) command("commentary", result.text)
+                scheduleTranslation(); scheduleAssessment()
+            } catch (_: CancellationException) { }
+            catch (e: Exception) { if (session?.id == id) presentError(e, R.string.error_help_failed) }
+            finally { if (token == generation) working = false }
+        }
+    }
+
     fun lookup(word: String, sentence: String) {
         if (!cloudReady() || word.isBlank()) return
         clearLookup()
@@ -982,9 +1064,9 @@ class MuralViewModel(application: Application) : AndroidViewModel(application) {
         val token = generation; val module = language; working = true; topicResult = null
         actionJob = viewModelScope.launch {
             try {
-                val result = teaching(session?.id, HelperPurpose.TOPIC, UUID.randomUUID().toString(), TeachingPolicy.currentTopic(module), query.trim().take(500), search = true)
+                val result = teaching(session?.id, HelperPurpose.TOPIC, UUID.randomUUID().toString(),
+                    TeachingPolicy.currentTopicOffline(module, archive.preferences.interests), query.trim().take(500), search = false)
                 if (token != generation) return@launch
-                if (result.sources.isEmpty()) { presentError(getApplication<Application>().getString(R.string.error_topic_unsourced)); return@launch }
                 val brief = TopicBrief(languageID = module.id, query = query.trim().take(500), text = result.text, sources = result.sources)
                 topicResult = brief
                 if (isRunning) updateSession { it.topics += brief; addUsage(it, result.usage) }
@@ -1040,5 +1122,10 @@ class MuralViewModel(application: Application) : AndroidViewModel(application) {
         return try { archive = ArchiveCodec.merge(archive, prepareImportedArchive(data)); persist(); notice = getApplication<Application>().getString(R.string.notice_backup_imported); true }
         catch (_: Exception) { presentError(getApplication<Application>().getString(R.string.error_import_failed)); false }
     }
-    override fun onCleared() { hostedBindings.disableHelpers(); transport.disconnect(); super.onCleared() }
+    override fun onCleared() {
+        hostedBindings.disableHelpers()
+        transport.disconnect()
+        openRouterVoice.disconnect()
+        super.onCleared()
+    }
 }

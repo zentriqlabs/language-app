@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "provider": "openrouter",
+  "baseUrl": "https://openrouter.ai/api/v1",
+  "models": {
+    "llm": "deepseek/deepseek-v4-pro-0813",
+    "stt": "qwen/qwen3-asr-flash-2026-02-10",
+    "tts": "hexgrad/kokoro-82m"
+  },
+  "tts": {
+    "defaultVoice": "af_bella",
+    "voicesByLocale": {
+      "ru-RU": "af_bella",
+      "de-DE": "af_bella",
+      "es-ES": "af_bella",
+      "en-US": "af_bella",
+      "fr-FR": "af_bella",
+      "it-IT": "af_bella",
+      "pt-BR": "af_bella",
+      "zh-CN": "af_bella",
+      "nb-NO": "af_bella"
+    }
+  },
+  "voicePrompt": {
+    "brevity": "Antworte im Sprachmodus stets kurz, direkt und in maximal zwei kurzen Sätzen. Keine Aufzählungen, keine Meta-Kommentare."
+  }
+}

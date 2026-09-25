@@ -30,29 +30,8 @@ struct APIResult { var text: String; var sources: [SourceLink]; var usage: APIUs
         return json
     }
     func respond(instructions: String, input: String, schema: [String: Any]? = nil, search: Bool = false) async throws -> APIResult {
-        var body: [String: Any] = ["model": "gpt-5.6-luna", "store": false, "instructions": instructions,
-                                  "input": [["role": "user", "content": input]], "max_output_tokens": schema == nil ? 1400 : 2200,
-                                  "reasoning": ["effort": "low"]]
-        if let schema { body["text"] = ["format": ["type": "json_schema", "name": "mural_result", "strict": true, "schema": schema]] }
-        if search { body["tools"] = [["type": "web_search"]]; body["tool_choice"] = "auto"; body["max_tool_calls"] = 1 }
-        let json = try await post("responses", body: body)
-        guard json["status"] as? String == "completed" else { throw APIError.incomplete }
-        var text = "", sources: [SourceLink] = [], usage = APIUsage()
-        for item in json["output"] as? [[String: Any]] ?? [] {
-            if item["type"] as? String == "web_search_call" { usage.searches += 1 }
-            for content in item["content"] as? [[String: Any]] ?? [] {
-                if content["type"] as? String == "refusal" { throw APIError.refused }
-                if content["type"] as? String == "output_text" { text += content["text"] as? String ?? "" }
-                for citation in content["annotations"] as? [[String: Any]] ?? [] {
-                    guard citation["type"] as? String == "url_citation", let url = citation["url"] as? String else { continue }
-                    let source = SourceLink(title: citation["title"] as? String ?? "Source", url: url)
-                    if source.safeURL != nil && !sources.contains(where: { $0.url == url }) { sources.append(source) }
-                }
-            }
-        }
-        if let u = json["usage"] as? [String: Any] { usage.input = u["input_tokens"] as? Int ?? 0; usage.output = u["output_tokens"] as? Int ?? 0 }
-        guard !text.isEmpty else { throw APIError.incomplete }
-        return APIResult(text: text, sources: sources, usage: usage)
+        guard let key = CredentialStore.read(), OpenRouterModels.isOpenRouterKey(key) else { throw APIError.missingKey }
+        return try await OpenRouterAPIClient().respond(instructions: instructions, input: input, schema: schema)
     }
     static func object(_ fields: [String: Any]) -> [String: Any] { ["type": "object", "properties": fields, "required": fields.keys.sorted(), "additionalProperties": false] }
     static let string: [String: Any] = ["type": "string"]
@@ -69,13 +48,13 @@ struct APIResult { var text: String; var sources: [SourceLink]; var usage: APIUs
         case missingKey, invalidResponse, incomplete, refused, http(Int)
         var errorDescription: String? {
             switch self {
-            case .missingKey: "Add your OpenAI key in Settings to begin."
-            case .invalidResponse, .incomplete: "OpenAI returned an incomplete response. Please try again."
+            case .missingKey: "Add your OpenRouter key in Settings to begin."
+            case .invalidResponse, .incomplete: "The AI provider returned an incomplete response. Please try again."
             case .refused: "Mural couldn’t complete that request. Try a different topic."
-            case .http(401): "Your OpenAI key wasn’t accepted. Check it in Settings."
-            case .http(403), .http(404): "This API key may not have access to the requested model. Check your OpenAI project."
-            case .http(429): "OpenAI’s usage or rate limit was reached. Check your project’s billing and limits."
-            case .http(let status): "OpenAI couldn’t complete the request (HTTP \(status)). Please try again."
+            case .http(401): "Your OpenRouter key wasn’t accepted. Check it in Settings."
+            case .http(403), .http(404): "This key may not have access to the requested model on OpenRouter."
+            case .http(429): "OpenRouter’s rate or usage limit was reached."
+            case .http(let status): "OpenRouter couldn’t complete the request (HTTP \(status)). Please try again."
             }
         }
     }
