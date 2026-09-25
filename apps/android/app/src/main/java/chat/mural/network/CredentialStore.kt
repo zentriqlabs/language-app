@@ -26,7 +26,7 @@ class CredentialStore internal constructor(
     @Synchronized
     fun save(key: String) {
         val value = key.trim()
-        if (!value.startsWith("sk-") || value.length < 20 || value.any(Char::isWhitespace)) {
+        if (!isValidApiKey(value)) {
             throw CredentialException.Invalid
         }
 
@@ -59,7 +59,7 @@ class CredentialStore internal constructor(
                 GCMParameterSpec(GCM_TAG_BITS, Base64.decode(encodedIv, Base64.NO_WRAP)),
             )
             cipher.doFinal(Base64.decode(encodedCiphertext, Base64.NO_WRAP)).toString(Charsets.UTF_8)
-                .takeIf { it.startsWith("sk-") && it.length >= 20 && it.none(Char::isWhitespace) }
+                .takeIf { isValidApiKey(it) }
                 ?: clearUnreadableCredential()
         } catch (_: Exception) {
             clearUnreadableCredential()
@@ -113,7 +113,14 @@ class CredentialStore internal constructor(
         data object Remove : CredentialException("The key couldn't be removed. Unlock this device and try again.")
     }
 
+    fun usesOpenRouter(): Boolean = read()?.let(OpenRouterModels::isOpenRouterKey) == true
+
     companion object {
+        internal fun isValidApiKey(value: String): Boolean {
+            val trimmed = value.trim()
+            if (trimmed.any(Char::isWhitespace) || trimmed.length < 20) return false
+            return trimmed.startsWith("sk-or-") || trimmed.startsWith("sk-")
+        }
         // The app excludes all shared preferences from cloud backup and device transfer.
         private const val PREFERENCES = "mural_openai_credentials"
         private const val CIPHERTEXT = "ciphertext"
