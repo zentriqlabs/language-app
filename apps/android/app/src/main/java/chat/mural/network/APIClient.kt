@@ -157,10 +157,10 @@ class APIClient private constructor(
 
         companion object {
             private fun messageFor(status: Int): String = when (status) {
-                401 -> "Your OpenAI key wasn't accepted. Check it in Settings."
-                403, 404 -> "This API key may not have access to the requested model. Check your OpenAI project."
-                429 -> "OpenAI's usage or rate limit was reached. Check your project billing and limits."
-                else -> "OpenAI couldn't complete the request (HTTP $status). Please try again."
+                401 -> "Your OpenRouter key wasn't accepted. Check it in Settings."
+                403, 404 -> "This key may not have access to the requested model on OpenRouter."
+                429 -> "OpenRouter rate or usage limit was reached."
+                else -> "OpenRouter couldn't complete the request (HTTP $status). Please try again."
             }
         }
     }

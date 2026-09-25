@@ -111,6 +111,8 @@ class MuralViewModel(application: Application) : AndroidViewModel(application) {
     private var lookupJob: Job? = null
     var topicResult by mutableStateOf<TopicBrief?>(null); private set
     var hasKey by mutableStateOf(false); private set
+    private var _providerEnabled by mutableStateOf(true)
+    val providerEnabled: Boolean get() = _providerEnabled
     val language get() = LanguageRegistry.get(archive.preferences.learningLanguageID)!!
     val learner get() = LearningEngine.project(archive.sessions, language.id, archive.preferences.hiddenWords)
     val isRunning get() = state in listOf("connecting", "active", "closing")
@@ -126,7 +128,7 @@ class MuralViewModel(application: Application) : AndroidViewModel(application) {
     private val phraseAudioCache = PhraseAudioCache(application)
     private val openRouterApi = OpenRouterAPIClient(credentials, phraseAudioCache)
     private val transport = LiveTransport(application, viewModelScope)
-    private val openRouterVoice = OpenRouterVoiceTransport(application, viewModelScope, openRouterApi)
+    private val openRouterVoice = OpenRouterVoiceTransport(application, viewModelScope, openRouterApi, phraseAudioCache)
     private var openRouterVoiceActive = false
     private val providerStore = ConversationProviderStore(application)
     private val hostedConfiguration = HostedConfiguration.parse(BuildConfig.MANAGED_API_ORIGIN)
@@ -224,6 +226,7 @@ class MuralViewModel(application: Application) : AndroidViewModel(application) {
                 conversationProvider = providers.selection
                 finalAssessmentTickets = ConversationProviderPolicy.recoveryTickets(loaded.first.finalAssessments, hostedSessionIDs)
                 hasKey = loaded.second
+                _providerEnabled = credentials.isProviderEnabled()
                 storageReady = true
                 recoverFinalAssessments()
                 refreshHostedReadiness()
@@ -360,10 +363,23 @@ class MuralViewModel(application: Application) : AndroidViewModel(application) {
             presentError(getApplication<Application>().getString(R.string.error_accept_ai_consent)); return false
         }
         val currentHosted = session?.id in hostedSessionIDs
-        if (!currentHosted && conversationProvider == ConversationProvider.PERSONAL_KEY && !hasKey) {
-            presentError(getApplication<Application>().getString(R.string.error_missing_key), needsKeySetup = true); return false
+        if (!currentHosted && conversationProvider == ConversationProvider.PERSONAL_KEY) {
+            if (!credentials.hasStoredKey) {
+                presentError(getApplication<Application>().getString(R.string.error_missing_key), needsKeySetup = true); return false
+            }
+            if (!credentials.isProviderEnabled()) {
+                presentError(getApplication<Application>().getString(R.string.error_provider_disabled)); return false
+            }
         }
         return true
+    }
+
+    fun setProviderEnabled(enabled: Boolean) {
+        if (isRunning) return
+        credentials.setProviderEnabled(enabled)
+        _providerEnabled = enabled
+        notice = if (enabled) getApplication<Application>().getString(R.string.notice_provider_enabled)
+        else getApplication<Application>().getString(R.string.notice_provider_disabled)
     }
     /** Called by the minutes/account UI after an explicit provider choice. No failure changes it. */
     fun selectConversationProvider(provider: ConversationProvider) {
@@ -601,7 +617,11 @@ class MuralViewModel(application: Application) : AndroidViewModel(application) {
             notice = getApplication<Application>().getString(R.string.notice_key_saved)
             if (NetworkStatus.isOnline(getApplication())) {
                 viewModelScope.launch {
-                    try { OfflinePhrasePrefetch.warm(openRouterApi, language, learner) } catch (_: Exception) { }
+                    try {
+                        OfflinePhrasePrefetch.warm(
+                            openRouterApi, language, learner, archive.sessions, archive.preferences.interests,
+                        )
+                    } catch (_: Exception) { }
                 }
             }
         }
@@ -735,7 +755,13 @@ class MuralViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 if (openRouterVoiceActive) {
-                    openRouterVoice.connect(instructions, history, module.locale)
+                    openRouterVoice.connect(
+                        instructions,
+                        history,
+                        module.locale,
+                        MeaningLanguageIds.idFor(archive.preferences.meaningLanguage),
+                        module.id,
+                    )
                 } else {
                     transport.connect(provider, instructions, history, module.locale)
                 }
@@ -806,6 +832,10 @@ class MuralViewModel(application: Application) : AndroidViewModel(application) {
     private fun handle(event: JsonObject) {
         if (session == null || !isRunning) return
         when (event["type"]?.jsonPrimitive?.content) {
+            "mural.bridge.request" -> {
+                val text = event["text"]?.jsonPrimitive?.contentOrNull ?: return
+                bridgeFromHomeLanguage(text)
+            }
             "mural.session.created" -> updateSession { it.providerID = (event["session"] as? JsonObject)?.get("id")?.jsonPrimitive?.content; it.voiceSeconds = 15.0 }
             "session.started" -> if (state == "connecting") {
                 state = "active"; lastActivity = nowSeconds()
@@ -1064,8 +1094,10 @@ class MuralViewModel(application: Application) : AndroidViewModel(application) {
         val token = generation; val module = language; working = true; topicResult = null
         actionJob = viewModelScope.launch {
             try {
-                val result = teaching(session?.id, HelperPurpose.TOPIC, UUID.randomUUID().toString(),
-                    TeachingPolicy.currentTopicOffline(module, archive.preferences.interests), query.trim().take(500), search = false)
+                val result = openRouterApi.researchTopic(
+                    TeachingPolicy.currentTopic(module),
+                    query.trim().take(500),
+                )
                 if (token != generation) return@launch
                 val brief = TopicBrief(languageID = module.id, query = query.trim().take(500), text = result.text, sources = result.sources)
                 topicResult = brief

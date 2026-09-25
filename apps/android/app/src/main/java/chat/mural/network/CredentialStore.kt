@@ -20,8 +20,20 @@ class CredentialStore internal constructor(
 
     private val preferences = context.applicationContext.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
 
+    /** Key material is stored (encrypted); may be temporarily disabled without deletion. */
+    val hasStoredKey: Boolean
+        get() = preferences.getString(CIPHERTEXT, null) != null
+
     val hasKey: Boolean
-        get() = read() != null
+        get() = hasStoredKey
+
+    @Synchronized
+    fun isProviderEnabled(): Boolean = preferences.getBoolean(PROVIDER_ENABLED, true)
+
+    @Synchronized
+    fun setProviderEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean(PROVIDER_ENABLED, enabled).commit()
+    }
 
     @Synchronized
     fun save(key: String) {
@@ -37,6 +49,7 @@ class CredentialStore internal constructor(
             val saved = preferences.edit()
                 .putString(CIPHERTEXT, Base64.encodeToString(ciphertext, Base64.NO_WRAP))
                 .putString(IV, Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
+                .putBoolean(PROVIDER_ENABLED, true)
                 .commit()
             if (!saved) throw CredentialException.Save
         } catch (error: CredentialException) {
@@ -48,6 +61,7 @@ class CredentialStore internal constructor(
 
     @Synchronized
     fun read(): String? {
+        if (!isProviderEnabled()) return null
         val encodedCiphertext = preferences.getString(CIPHERTEXT, null) ?: return null
         val encodedIv = preferences.getString(IV, null) ?: return clearUnreadableCredential()
         return try {
@@ -121,6 +135,7 @@ class CredentialStore internal constructor(
         private const val PREFERENCES = "mural_openai_credentials"
         private const val CIPHERTEXT = "ciphertext"
         private const val IV = "iv"
+        private const val PROVIDER_ENABLED = "provider_enabled"
         private const val KEY_ALIAS = "chat.mural.openai.aes"
         private const val ANDROID_KEY_STORE = "AndroidKeyStore"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"

@@ -2,31 +2,21 @@ package chat.mural.network
 
 import chat.mural.core.LanguageModule
 import chat.mural.core.LearnerState
-import chat.mural.core.nowSeconds
+import chat.mural.core.SessionRecord
 
 /**
- * Lädt bei Netzwerkverbindung die wichtigsten TTS-Snippets vor:
- * Begrüßung, Standard-Feedback und fällige Vokabeln (Lemma, nicht ganze Sätze).
+ * Lädt bei Netzwerkverbindung priorisierte TTS-Snippets vor (siehe [CachePrioritizer]).
  */
 object OfflinePhrasePrefetch {
-    /** Max. Anzahl Lemmas pro Lauf — Speicher und API-Kosten begrenzen. */
-    private const val MAX_LEMMAS = 12
-
     suspend fun warm(
         api: OpenRouterAPIClient,
         language: LanguageModule,
         learner: LearnerState,
+        sessions: List<SessionRecord>,
+        interests: String,
         onProgress: (Int, Int) -> Unit = { _, _ -> },
     ) {
-        val phrases = linkedSetOf<String>()
-        phrases.add(language.greeting)
-        phrases.addAll(StandardVoicePhrases.forLanguage(language.id))
-        learner.words
-            .filter { it.dueAt < nowSeconds() || it.bars <= 1 }
-            .sortedBy { it.dueAt }
-            .take(MAX_LEMMAS)
-            .mapTo(phrases) { it.lemma }
-        val list = phrases.filter { it.isNotBlank() }
+        val list = CachePrioritizer.phrasesForWarmup(language, learner, sessions, interests)
         var done = 0
         for (phrase in list) {
             try {

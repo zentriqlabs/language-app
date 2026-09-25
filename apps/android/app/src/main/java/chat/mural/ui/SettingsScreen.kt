@@ -131,11 +131,26 @@ fun SettingsScreen(vm: MuralViewModel, onExport: () -> Unit, onImport: () -> Uni
                             SettingsDivider()
                             if (vm.hasKey) Text(stringResource(R.string.settings_key_saved_notice), style = MaterialTheme.typography.bodySmall,
                                 color = MuralColors.Secondary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
+                            if (vm.hasKey) {
+                                SettingsDivider()
+                                Row(
+                                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(stringResource(R.string.settings_provider_enabled), style = MaterialTheme.typography.bodyMedium)
+                                    androidx.compose.material3.Switch(
+                                        checked = vm.providerEnabled,
+                                        onCheckedChange = { vm.setProviderEnabled(it) },
+                                        enabled = !vm.isRunning,
+                                    )
+                                }
+                            }
                             SettingsRow(stringResource(if (vm.hasKey) R.string.settings_replace_key else R.string.settings_save_key),
                                 enabled = !vm.isRunning, tint = MuralColors.Secondary, chevron = true, onClick = { keyDialog = true })
                             SettingsDivider()
                             SettingsRow(stringResource(R.string.settings_open_api_keys), tint = MuralColors.Secondary,
-                                onClick = { open("https://platform.openai.com/api-keys") })
+                                onClick = { open("https://openrouter.ai/keys") })
                             if (vm.hasKey) {
                                 SettingsDivider()
                                 SettingsRow(stringResource(R.string.settings_remove_key), enabled = !vm.isRunning,

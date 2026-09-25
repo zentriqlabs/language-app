@@ -21,6 +21,10 @@
     <string name="error_missing_key">Add your OpenRouter key in Settings to begin.</string>
     <string name="error_key_invalid">Enter a valid OpenRouter API key (sk-or-v1-…).</string>
     <string name="error_offline_voice">Voice needs the internet. Cached phrases still work for words you saved earlier.</string>
+    <string name="error_provider_disabled">OpenRouter is turned off in Settings. Turn it on to use voice and AI features.</string>
+    <string name="notice_provider_enabled">OpenRouter access is on.</string>
+    <string name="notice_provider_disabled">OpenRouter access is off. Your key stays on this device.</string>
+    <string name="settings_provider_enabled">Use OpenRouter</string>
     <string name="error_key_save">The key couldn\'t be saved securely on this device.</string>
     <string name="error_key_save_failed">The key couldn\'t be saved.</string>
     <string name="error_key_remove">The key couldn\'t be removed. Unlock this device and try again.</string>
@@ -198,7 +202,7 @@
     <string name="settings_corrections_label">Corrections</string>
     <string name="settings_corrections_value">Gently, as we talk</string>
     <string name="settings_open_api_keys">Open OpenAI API keys</string>
-    <string name="settings_models_footer">Voice: GPT-Live-1 · Teacher: GPT-5.6 Luna</string>
+    <string name="settings_models_footer">OpenRouter: STT · LLM · TTS (configurable in shared/openrouter/models.json)</string>
     <string name="settings_delete_key_confirm_title">Delete the saved key?</string>
     <string name="settings_delete_key_confirm_message">You\'ll need another key to use AI features again.</string>
     <string name="settings_delete_all_confirm_title">Delete all learning data on this device?</string>

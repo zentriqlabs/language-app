@@ -42,6 +42,7 @@ class OpenRouterVoiceTransport(
     context: Context,
     private val scope: CoroutineScope,
     private val api: OpenRouterAPIClient,
+    private val phraseCache: PhraseAudioCache,
 ) : VoiceGateway {
     override var onEvent: ((JsonObject) -> Unit)? = null
     override var onFailure: ((String) -> Unit)? = null
@@ -49,6 +50,8 @@ class OpenRouterVoiceTransport(
 
     private val appContext = context.applicationContext
     private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    private val languageDetector = LanguageDetector(appContext)
+    private val phrasePlayer = SegmentedPhrasePlayer(api, phraseCache) { bytes -> playAudio(bytes) }
     private val closing = AtomicBoolean(false)
     private var sessionJob: Job? = null
     private var systemInstructions = ""
@@ -57,15 +60,26 @@ class OpenRouterVoiceTransport(
     private val transcript = mutableListOf<Pair<String, String>>()
     private var voiceSeconds = 0.0
     private var listenGate = CompletableDeferred<Unit>()
+    private var homeLanguageId: String? = null
+    private var targetLanguageId: String? = null
 
     @Volatile override var started: Boolean = false
     @Volatile override var isMuted: Boolean = false
+    @Volatile private var assistantSpeaking = false
 
-    override suspend fun connect(instructions: String, history: JsonArray, language: String?) {
+    override suspend fun connect(
+        instructions: String,
+        history: JsonArray,
+        language: String?,
+        homeLanguageId: String?,
+        targetLanguageId: String?,
+    ) {
         disconnect()
         closing.set(false)
         systemInstructions = instructions
         locale = language
+        this.homeLanguageId = homeLanguageId
+        this.targetLanguageId = targetLanguageId
         overlay = ""
         transcript.clear()
         voiceSeconds = 0.0
@@ -142,6 +156,13 @@ class OpenRouterVoiceTransport(
                 val text = api.transcribe(pcm, SAMPLE_RATE)
                 if (text.isBlank()) continue
                 emitTranscript("session.input_transcript.delta", text)
+                if (shouldBridgeHomeLanguage(text)) {
+                    emit(buildJsonObject {
+                        put("type", "mural.bridge.request")
+                        put("text", text)
+                    })
+                    continue
+                }
                 transcript += "user" to text
                 assistantTurn(trigger = "user")
             }
@@ -165,9 +186,10 @@ class OpenRouterVoiceTransport(
     }
 
     private suspend fun speakAssistant(text: String) {
-        val audio = api.synthesizeSpeech(text, locale)
+        assistantSpeaking = true
         emitTranscript("session.output_transcript.delta", text)
-        playAudio(audio)
+        phrasePlayer.speak(text, locale)
+        assistantSpeaking = false
         voiceSeconds += maxOf(1.0, text.length / 14.0)
         emit(buildJsonObject {
             put("type", "session.usage.updated")
@@ -225,7 +247,7 @@ class OpenRouterVoiceTransport(
         var heardSpeech = false
         try {
             record.startRecording()
-            while (currentCoroutineContext().isActive && !closing.get() && !isMuted && collected.size() < maxBytes) {
+            while (currentCoroutineContext().isActive && !closing.get() && !isMuted && !assistantSpeaking && collected.size() < maxBytes) {
                 val read = record.read(buffer, 0, buffer.size)
                 if (read <= 0) continue
                 val level = rms(buffer, read)
@@ -283,6 +305,17 @@ class OpenRouterVoiceTransport(
             put("start_ms", now)
             put("end_ms", now + text.length.coerceAtLeast(1) * 45)
         })
+    }
+
+    private suspend fun shouldBridgeHomeLanguage(text: String): Boolean {
+        val home = homeLanguageId ?: return false
+        val target = targetLanguageId ?: return false
+        if (text.length < 6) return false
+        val hypothesis = languageDetector.detect(text) ?: return false
+        val detected = LanguageDetector.normalizeLanguageID(hypothesis.languageID)
+        val matchesHome = detected == home || detected.startsWith("$home-")
+        val matchesTarget = detected == target || detected.startsWith("$target-")
+        return hypothesis.confidence > 0.82 && matchesHome && !matchesTarget
     }
 
     private fun emit(event: JsonObject) {

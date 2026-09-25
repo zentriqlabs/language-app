@@ -28,6 +28,29 @@ Interessen trägst du unter **Einstellungen** ein; sie fließen in `TeachingPoli
 - **Wörter**: Recall-Balken 0–3, fällige Wörter (`dueAt`) werden im System-Prompt zur Wiederholung genannt.
 - Kein CEFR-Zertifikat — heuristische App-Logik.
 
+## Segment-Cache (längere Antworten)
+
+Antworten werden in **Sätze/kurze Phrasen** zerlegt (`SegmentedPhrasePlayer`). Jede Einheit wird einzeln gecacht und **aneinander abgespielt** — ähnlich wie ein Satzbaukasten aus Kernwortschatz + zuletzt gehörten Snippets.
+
+**Prefetch-Priorität** (`CachePrioritizer`):
+
+1. Zuletzt gehörte kurze Assistenten-Sätze (letzte Sessions)
+2. Fällige / fragile Lemmas („2 vor, 1 zurück“)
+3. High-Frequency-Chunks + Begrüßung + Standard-Feedback
+4. Einträge aus deinen **Interessen** (kurze Stichworte)
+
+## Mikrofon: wann an / aus?
+
+| Zustand | Mikrofon |
+|---------|----------|
+| Talk **idle** | Aus |
+| **connecting** | Berechtigung nötig; Aufnahme startet mit aktiver Session |
+| **active**, nicht stumm | An zwischen den Turns (VAD: ~1,2 s Stille beendet deinen Turn) |
+| **active**, stumm | Aufnahme pausiert |
+| **KI spricht** (TTS) | Aufnahme **aus** (kein Echo in STT) |
+| **Heimatsprache erkannt** | Hilfe-Bridge per Sprache, kein normaler Zielsprachen-Turn |
+| **end / Hintergrund / closing** | Aus, Session beendet |
+
 ## Offline & Cache
 
 - **Ohne Internet:** Gesprächsverlauf, Wörterbuch, exportierter Backup = nutzbar.
@@ -39,10 +62,17 @@ Interessen trägst du unter **Einstellungen** ein; sie fließen in `TeachingPoli
 
 In **Talk → Tippen** Text mit `::` beginnen, z. B. `::Wie sage ich „Bahnhof“?` → `bridgeFromHomeLanguage`.
 
+**Per Mikrofon:** Während einer aktiven Talk-Session erkennt die App (über `LanguageDetector`) deine **Bedeutungssprache**. Dann wird automatisch die Hilfe-Bridge ausgelöst — ohne `::`.
+
+## Current Topic (OpenRouter)
+
+`currentTopic()` nutzt wieder `TeachingPolicy.currentTopic` plus `OpenRouterAPIClient.researchTopic()` (Modell in `shared/openrouter/models.json` → `topicResearch`, Platzhalter `:online` bis du den exakten Slug nennst).
+
 ## Gehostete Stimme / Minuten / Websuche (entfernt für privat)
 
-- **Gehostete Stimme:** Mural-Server führt OpenAI Live für zahlende Nutzer aus — bei dir **deaktiviert** (`MANAGED_API_ORIGIN` leer).
-- **Websuche/Delegation:** Früher Live-Themen & Fakten über OpenAI — jetzt **ohne Websuche** (`currentTopicOffline`, Delegation ohne `search`).
+- **Gehostete Stimme:** `api.mural.chat` + OpenAI **GPT-Live** (WebRTC) für Konten mit Minutenpaket — bei deinem Build **aus** (`MANAGED_API_ORIGIN` leer).
+- **Nutzen früher:** Kein eigener OpenAI-Key nötig, zentrale Abrechnung, niedrige Latenz durch Live-Audio.
+- **Privat:** BYOK OpenRouter (STT/LLM/TTS); Topic-Recherche über OpenRouter statt Mural-Websuche.
 
 ## Android installieren
 

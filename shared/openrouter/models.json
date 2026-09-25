@@ -5,7 +5,8 @@
   "models": {
     "llm": "deepseek/deepseek-v4-pro-0813",
     "stt": "qwen/qwen3-asr-flash-2026-02-10",
-    "tts": "hexgrad/kokoro-82m"
+    "tts": "hexgrad/kokoro-82m",
+    "topicResearch": "deepseek/deepseek-v4-pro-0813:online"
   },
   "tts": {
     "defaultVoice": "af_bella",

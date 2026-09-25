@@ -40,6 +40,19 @@ class OpenRouterAPIClient private constructor(
     internal constructor(key: String?, client: OkHttpClient, cache: PhraseAudioCache? = null) :
         this({ key }, client, cache)
 
+    /** Aktuelles Thema mit konfigurierbarem OpenRouter-Modell (z. B. `:online`). */
+    suspend fun researchTopic(instructions: String, query: String): APIResult {
+        val body = buildJsonObject {
+            put("model", ProviderModelConfig.current.topicResearch)
+            put("messages", buildJsonArray {
+                add(buildJsonObject { put("role", "system"); put("content", instructions) })
+                add(buildJsonObject { put("role", "user"); put("content", query) })
+            })
+            put("max_tokens", 1_800)
+        }
+        return decodeOpenRouterChat(post("chat/completions", body))
+    }
+
     override suspend fun respond(
         instructions: String,
         input: String,
